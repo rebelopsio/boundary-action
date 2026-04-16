@@ -11,7 +11,7 @@ jobs:
     name: Test passing check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run boundary check (expect pass)
         id: boundary
@@ -36,7 +36,7 @@ jobs:
     name: Test failing check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run boundary check (expect fail)
         id: boundary
@@ -66,7 +66,7 @@ jobs:
     name: Test output format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run boundary check
         id: boundary

@@ -1,0 +1,73 @@
+name: PR Labeler
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF"
+
+      - name: Label by area
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          CHANGED=$(git diff --name-only "origin/$BASE_REF"...HEAD)
+
+          if echo "$CHANGED" | grep -q "^action\.yml$"; then
+            gh pr edit "$PR_NUMBER" --add-label "action-definition"
+          fi
+
+          if echo "$CHANGED" | grep -q "^scripts/"; then
+            gh pr edit "$PR_NUMBER" --add-label "scripts"
+          fi
+
+          if echo "$CHANGED" | grep -q "^testdata/"; then
+            gh pr edit "$PR_NUMBER" --add-label "testdata"
+          fi
+
+          if echo "$CHANGED" | grep -q "^\.github/workflows/"; then
+            gh pr edit "$PR_NUMBER" --add-label "ci-cd"
+          fi
+
+          if echo "$CHANGED" | grep -q "\.md$"; then
+            gh pr edit "$PR_NUMBER" --add-label "documentation"
+          fi
+
+      - name: Label change size
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          LINES_CHANGED=$(git diff "origin/$BASE_REF"...HEAD --stat \
+            | tail -1 \
+            | awk '{print $4 + $6}')
+
+          LINES_CHANGED=${LINES_CHANGED:-0}
+
+          if [ "$LINES_CHANGED" -le 50 ]; then
+            gh pr edit "$PR_NUMBER" --add-label "size:tiny"
+          elif [ "$LINES_CHANGED" -le 200 ]; then
+            gh pr edit "$PR_NUMBER" --add-label "size:small"
+          elif [ "$LINES_CHANGED" -le 400 ]; then
+            gh pr edit "$PR_NUMBER" --add-label "size:medium"
+          else
+            gh pr edit "$PR_NUMBER" --add-label "size:large"
+          fi
