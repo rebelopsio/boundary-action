@@ -22,6 +22,12 @@ jobs:
 
       # Update the major version tag (e.g., v1) to point to the latest release.
       # This is the standard convention for GitHub Actions so users can pin to v1.
+      - name: Checkout
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Update major version tag
         if: ${{ steps.release.outputs.release_created }}
         env:
