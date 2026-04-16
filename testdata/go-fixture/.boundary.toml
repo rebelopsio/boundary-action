@@ -1,0 +1,6 @@
+[project]
+languages = ["go"]
+
+[layers]
+domain = ["**/domain/**"]
+infrastructure = ["**/infrastructure/**"]

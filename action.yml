@@ -1,0 +1,184 @@
+name: 'Boundary Architecture Check'
+description: 'Run boundary architecture analysis and emit PR annotations for violations'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  path:
+    description: 'Path to the project root to analyze'
+    required: false
+    default: '.'
+  fail-on:
+    description: 'Minimum severity to fail the check (error or warning)'
+    required: false
+    default: 'error'
+  config:
+    description: 'Path to .boundary.toml config file'
+    required: false
+    default: ''
+  languages:
+    description: 'Comma-separated languages to analyze (empty = auto-detect)'
+    required: false
+    default: ''
+  track:
+    description: 'Save analysis snapshot for evolution tracking'
+    required: false
+    default: 'false'
+  no-regression:
+    description: 'Fail if architecture score regresses from last snapshot'
+    required: false
+    default: 'false'
+  incremental:
+    description: 'Use incremental analysis (cache unchanged files)'
+    required: false
+    default: 'false'
+  per-service:
+    description: 'Analyze each service independently (monorepo mode)'
+    required: false
+    default: 'false'
+  boundary-version:
+    description: 'Exact boundary release tag to install'
+    required: false
+    default: '0.27.0'
+
+outputs:
+  score:
+    description: 'Overall architecture score (0-100)'
+    value: ${{ steps.parse.outputs.score }}
+  violations:
+    description: 'Total violation count'
+    value: ${{ steps.parse.outputs.violations }}
+  errors:
+    description: 'Error-severity violation count'
+    value: ${{ steps.parse.outputs.errors }}
+  warnings:
+    description: 'Warning-severity violation count'
+    value: ${{ steps.parse.outputs.warnings }}
+  passed:
+    description: '"true" or "false"'
+    value: ${{ steps.parse.outputs.passed }}
+
+runs:
+  using: 'composite'
+  steps:
+    # Step 1 — Install boundary (Linux/macOS)
+    - name: Install boundary (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: bash "${{ github.action_path }}/scripts/install.sh" "${{ inputs.boundary-version }}"
+
+    # Step 2 — Install boundary (Windows)
+    - name: Install boundary (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/scripts/install.ps1" -BoundaryVersion "${{ inputs.boundary-version }}"
+
+    # Step 3 — Run boundary check
+    - name: Run boundary check
+      id: check
+      continue-on-error: true
+      shell: bash
+      run: |
+        ARGS=("${{ inputs.path }}")
+        ARGS+=(--format json --compact)
+        ARGS+=(--fail-on "${{ inputs.fail-on }}")
+
+        if [ -n "${{ inputs.config }}" ]; then
+          ARGS+=(--config "${{ inputs.config }}")
+        fi
+        if [ -n "${{ inputs.languages }}" ]; then
+          ARGS+=(--languages "${{ inputs.languages }}")
+        fi
+        if [ "${{ inputs.track }}" = "true" ]; then
+          ARGS+=(--track)
+        fi
+        if [ "${{ inputs.no-regression }}" = "true" ]; then
+          ARGS+=(--no-regression)
+        fi
+        if [ "${{ inputs.incremental }}" = "true" ]; then
+          ARGS+=(--incremental)
+        fi
+        if [ "${{ inputs.per-service }}" = "true" ]; then
+          ARGS+=(--per-service)
+        fi
+
+        OUTPUT_FILE="${{ runner.temp }}/boundary-output.json"
+        boundary check "${ARGS[@]}" > "$OUTPUT_FILE"
+
+        # Fallback if boundary produced no output
+        if [ ! -s "$OUTPUT_FILE" ]; then
+          echo '{"score":{"overall":0},"violations":[],"check":{"passed":false,"fail_on":"error","failing_violation_count":0}}' > "$OUTPUT_FILE"
+        fi
+
+    # Step 4 — Parse outputs
+    - name: Parse outputs
+      id: parse
+      shell: bash
+      run: |
+        OUTPUT_FILE="${{ runner.temp }}/boundary-output.json"
+        echo "score=$(jq -r '.score.overall // "0"' "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
+        echo "violations=$(jq -r '.violations | length' "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
+        echo "errors=$(jq -r '[.violations[] | select(.severity == "error")] | length' "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
+        echo "warnings=$(jq -r '[.violations[] | select(.severity == "warning")] | length' "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
+        echo "passed=$(jq -r '.check.passed' "$OUTPUT_FILE")" >> "$GITHUB_OUTPUT"
+
+    # Step 5 — Emit annotations
+    # location.file from boundary already includes the path argument,
+    # so no prefix manipulation is needed.
+    - name: Emit annotations
+      shell: bash
+      run: |
+        OUTPUT_FILE="${{ runner.temp }}/boundary-output.json"
+
+        jq -r '
+          .violations[] |
+          "::\(.severity) file=\(.location.file),line=\(.location.line),col=\(.location.column)::\(.message)\(if .suggestion and .suggestion != "" then ". \(.suggestion)" else "" end)"
+        ' "$OUTPUT_FILE"
+
+    # Step 6 — Write job summary
+    - name: Write job summary
+      shell: bash
+      run: |
+        SCORE="${{ steps.parse.outputs.score }}"
+        PASSED="${{ steps.parse.outputs.passed }}"
+        ERRORS="${{ steps.parse.outputs.errors }}"
+        WARNINGS="${{ steps.parse.outputs.warnings }}"
+        VIOLATIONS="${{ steps.parse.outputs.violations }}"
+        VERSION="${{ inputs.boundary-version }}"
+
+        if [ "$PASSED" = "true" ]; then
+          STATUS="✅ Passed"
+        else
+          STATUS="❌ Failed"
+        fi
+
+        {
+          echo "## Boundary Architecture Check"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| Overall Score | ${SCORE}/100 |"
+          echo "| Status | ${STATUS} |"
+          echo "| Errors | ${ERRORS} |"
+          echo "| Warnings | ${WARNINGS} |"
+          echo "| Total Violations | ${VIOLATIONS} |"
+          echo "| boundary version | v${VERSION} |"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$PASSED" = "false" ]; then
+          OUTPUT_FILE="${{ runner.temp }}/boundary-output.json"
+          {
+            echo ""
+            echo "### Error Violations"
+            echo ""
+            jq -r '[.violations[] | select(.severity == "error")] | .[] | "- **\(.location.file):\(.location.line)** — \(.message)"' "$OUTPUT_FILE"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    # Step 7 — Propagate exit code
+    - name: Propagate exit code
+      if: steps.check.outcome == 'failure'
+      shell: bash
+      run: exit 1

@@ -1,0 +1,109 @@
+name: Test boundary-action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-pass:
+    name: Test passing check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run boundary check (expect pass)
+        id: boundary
+        uses: ./
+        with:
+          path: testdata/go-fixture-clean
+          fail-on: error
+
+      - name: Assert passed
+        shell: bash
+        run: |
+          if [ "${{ steps.boundary.outputs.passed }}" != "true" ]; then
+            echo "::error::Expected passed=true, got '${{ steps.boundary.outputs.passed }}'"
+            exit 1
+          fi
+          if [ -z "${{ steps.boundary.outputs.score }}" ]; then
+            echo "::error::Expected non-empty score"
+            exit 1
+          fi
+
+  test-fail:
+    name: Test failing check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run boundary check (expect fail)
+        id: boundary
+        uses: ./
+        continue-on-error: true
+        with:
+          path: testdata/go-fixture
+          fail-on: error
+
+      - name: Assert failed
+        shell: bash
+        run: |
+          if [ "${{ steps.boundary.outputs.passed }}" != "false" ]; then
+            echo "::error::Expected passed=false, got '${{ steps.boundary.outputs.passed }}'"
+            exit 1
+          fi
+          if [ "${{ steps.boundary.outputs.errors }}" -eq 0 ]; then
+            echo "::error::Expected errors > 0"
+            exit 1
+          fi
+          if [ "${{ steps.boundary.outcome }}" != "failure" ]; then
+            echo "::error::Expected step outcome=failure, got '${{ steps.boundary.outcome }}'"
+            exit 1
+          fi
+
+  test-outputs:
+    name: Test output format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run boundary check
+        id: boundary
+        uses: ./
+        continue-on-error: true
+        with:
+          path: testdata/go-fixture
+
+      - name: Validate output types
+        shell: bash
+        run: |
+          # Score should be numeric (integer or float)
+          if ! echo "${{ steps.boundary.outputs.score }}" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
+            echo "::error::score is not numeric: '${{ steps.boundary.outputs.score }}'"
+            exit 1
+          fi
+
+          # Violations should be an integer
+          if ! echo "${{ steps.boundary.outputs.violations }}" | grep -qE '^[0-9]+$'; then
+            echo "::error::violations is not an integer: '${{ steps.boundary.outputs.violations }}'"
+            exit 1
+          fi
+
+          # Errors should be an integer
+          if ! echo "${{ steps.boundary.outputs.errors }}" | grep -qE '^[0-9]+$'; then
+            echo "::error::errors is not an integer: '${{ steps.boundary.outputs.errors }}'"
+            exit 1
+          fi
+
+          # Warnings should be an integer
+          if ! echo "${{ steps.boundary.outputs.warnings }}" | grep -qE '^[0-9]+$'; then
+            echo "::error::warnings is not an integer: '${{ steps.boundary.outputs.warnings }}'"
+            exit 1
+          fi
+
+          # Passed should be true or false
+          if ! echo "${{ steps.boundary.outputs.passed }}" | grep -qE '^(true|false)$'; then
+            echo "::error::passed is not a boolean: '${{ steps.boundary.outputs.passed }}'"
+            exit 1
+          fi
